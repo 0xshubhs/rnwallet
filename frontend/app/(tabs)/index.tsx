@@ -4,10 +4,8 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import WalletWebView from '@/components/WalletWebView';
 
-// Configure your backend URL here
-// Use your Mac's IP address for Android emulator/device (localhost doesn't work)
-// The IP address from your Expo QR code is: 192.168.3.126
-const BACKEND_URL = 'http://192.168.3.126:3000';
+// Configure your backend URL from environment variable
+const BACKEND_URL =  'https://2qpfn6bb-3001.inc1.devtunnels.ms';
 const DAPP_URL = `${BACKEND_URL}/index.html`;
 
 export default function HomeScreen() {
