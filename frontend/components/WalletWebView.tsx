@@ -1,7 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { View, StyleSheet, Alert, ActivityIndicator, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { io, Socket } from 'socket.io-client';
 
 interface WalletWebViewProps {
   dappUrl: string;
@@ -22,69 +21,11 @@ export default function WalletWebView({
 }: WalletWebViewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [waitingForConnection, setWaitingForConnection] = useState(!!sessionId);
+  const [waitingForConnection] = useState(!!sessionId);
   const webViewRef = useRef<WebView>(null);
-  const socketRef = useRef<Socket | null>(null);
 
-  // Setup Socket.IO connection when sessionId is provided
-  useEffect(() => {
-    if (!sessionId) return;
-
-    // Extract backend URL from dappUrl
-    const backendUrl = dappUrl.replace(/\/[^/]*$/, '');
-    console.log('🔌 [SOCKET] Connecting to:', backendUrl, 'for session:', sessionId);
-
-    // Connect to Socket.IO server
-    const socket = io(backendUrl, {
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-    });
-
-    socketRef.current = socket;
-
-    socket.on('connect', () => {
-      console.log('✅ [SOCKET] Connected with ID:', socket.id);
-      // Join the session room
-      socket.emit('join', sessionId);
-      console.log('📥 [SOCKET] Joined session room:', sessionId);
-    });
-
-    socket.on('session:connected', (data: { sessionId: string; address: string }) => {
-      console.log('🎉 [SOCKET] Session connected event received:', data);
-      if (data.sessionId === sessionId) {
-        setWaitingForConnection(false);
-        setLoading(false);
-        Alert.alert(
-          '✅ Wallet Connected!',
-          `Successfully connected with address:\n${data.address}`,
-          [
-            {
-              text: 'Continue',
-              onPress: () => {
-                onAuthenticated?.(data.address);
-              },
-            },
-          ]
-        );
-      }
-    });
-
-    socket.on('connect_error', (err) => {
-      console.error('❌ [SOCKET] Connection error:', err.message);
-    });
-
-    socket.on('disconnect', (reason) => {
-      console.log('🔌 [SOCKET] Disconnected:', reason);
-    });
-
-    // Cleanup on unmount
-    return () => {
-      console.log('🧹 [SOCKET] Cleaning up socket connection');
-      socket.disconnect();
-    };
-  }, [sessionId, dappUrl, onAuthenticated]);
+  // NOTE: Socket.IO connection is now handled in the parent HomeScreen component
+  // This component only displays the waiting UI and handles WebView messages
 
   const handleMessage = (event: any) => {
     try {
