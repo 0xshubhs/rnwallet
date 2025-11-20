@@ -1,23 +1,90 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { View, StyleSheet, Alert, ActivityIndicator, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { io, Socket } from 'socket.io-client';
 
 interface WalletWebViewProps {
   dappUrl: string;
+  sessionId?: string;
   onAuthenticated?: (address: string) => void;
   onTransactionSent?: (txHash: string) => void;
   onError?: (error: string) => void;
+  onOpenMetaMask?: () => void;
 }
 
 export default function WalletWebView({
   dappUrl,
+  sessionId,
   onAuthenticated,
   onTransactionSent,
-  onError
+  onError,
+  onOpenMetaMask
 }: WalletWebViewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [waitingForConnection, setWaitingForConnection] = useState(!!sessionId);
   const webViewRef = useRef<WebView>(null);
+  const socketRef = useRef<Socket | null>(null);
+
+  // Setup Socket.IO connection when sessionId is provided
+  useEffect(() => {
+    if (!sessionId) return;
+
+    // Extract backend URL from dappUrl
+    const backendUrl = dappUrl.replace(/\/[^/]*$/, '');
+    console.log('🔌 [SOCKET] Connecting to:', backendUrl, 'for session:', sessionId);
+
+    // Connect to Socket.IO server
+    const socket = io(backendUrl, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+    });
+
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      console.log('✅ [SOCKET] Connected with ID:', socket.id);
+      // Join the session room
+      socket.emit('join', sessionId);
+      console.log('📥 [SOCKET] Joined session room:', sessionId);
+    });
+
+    socket.on('session:connected', (data: { sessionId: string; address: string }) => {
+      console.log('🎉 [SOCKET] Session connected event received:', data);
+      if (data.sessionId === sessionId) {
+        setWaitingForConnection(false);
+        setLoading(false);
+        Alert.alert(
+          '✅ Wallet Connected!',
+          `Successfully connected with address:\n${data.address}`,
+          [
+            {
+              text: 'Continue',
+              onPress: () => {
+                onAuthenticated?.(data.address);
+              },
+            },
+          ]
+        );
+      }
+    });
+
+    socket.on('connect_error', (err) => {
+      console.error('❌ [SOCKET] Connection error:', err.message);
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log('🔌 [SOCKET] Disconnected:', reason);
+    });
+
+    // Cleanup on unmount
+    return () => {
+      console.log('🧹 [SOCKET] Cleaning up socket connection');
+      socket.disconnect();
+    };
+  }, [sessionId, dappUrl, onAuthenticated]);
 
   const handleMessage = (event: any) => {
     try {
@@ -60,6 +127,11 @@ export default function WalletWebView({
         case 'error':
           Alert.alert('Error', data.error);
           onError?.(data.error);
+          break;
+
+        case 'noWalletDetected':
+          // Trigger MetaMask opening from parent component
+          onOpenMetaMask?.();
           break;
 
         default:
@@ -127,7 +199,25 @@ export default function WalletWebView({
 
   return (
     <View style={styles.container}>
-      {loading && (
+      {waitingForConnection && (
+        <View style={styles.waitingContainer}>
+          <ActivityIndicator size="large" color="#667eea" />
+          <Text style={styles.waitingTitle}>🦊 Waiting for MetaMask</Text>
+          <Text style={styles.waitingText}>
+            Complete the connection in MetaMask browser:
+          </Text>
+          <Text style={styles.waitingSteps}>
+            1. Connect your wallet{'\n'}
+            2. Sign the login message{'\n'}
+            3. You&apos;ll be notified automatically!
+          </Text>
+          <View style={styles.statusIndicator}>
+            <View style={styles.statusDot} />
+            <Text style={styles.statusText}>Listening for connection...</Text>
+          </View>
+        </View>
+      )}
+      {loading && !waitingForConnection && (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#667eea" />
           <Text style={styles.loadingText}>Loading Wallet...</Text>
@@ -142,7 +232,7 @@ export default function WalletWebView({
         javaScriptEnabled={true}
         domStorageEnabled={true}
         originWhitelist={['*']}
-        style={styles.webview}
+        style={[styles.webview, waitingForConnection && styles.webviewHidden]}
       />
     </View>
   );
@@ -155,6 +245,10 @@ const styles = StyleSheet.create({
   },
   webview: {
     flex: 1,
+  },
+  webviewHidden: {
+    opacity: 0,
+    position: 'absolute',
   },
   loadingContainer: {
     position: 'absolute',
@@ -171,6 +265,66 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 16,
     color: '#667eea',
+    fontWeight: '600',
+  },
+  waitingContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    backgroundImage: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    zIndex: 2,
+    padding: 40,
+  },
+  waitingTitle: {
+    marginTop: 24,
+    fontSize: 24,
+    color: '#333',
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  waitingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    paddingHorizontal: 20,
+  },
+  waitingSteps: {
+    marginTop: 20,
+    fontSize: 15,
+    color: '#444',
+    textAlign: 'left',
+    lineHeight: 28,
+    backgroundColor: '#f8f9fa',
+    padding: 20,
+    borderRadius: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#667eea',
+  },
+  statusIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 32,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    backgroundColor: '#e8f5e9',
+    borderRadius: 20,
+  },
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#4caf50',
+    marginRight: 10,
+  },
+  statusText: {
+    fontSize: 14,
+    color: '#2e7d32',
     fontWeight: '600',
   },
   errorContainer: {

@@ -1,17 +1,125 @@
-import { useState } from 'react';
-import { StyleSheet, View, TouchableOpacity, Text, Linking, Alert } from 'react-native';
+import { useState, useEffect, useRef } from 'react';
+import { StyleSheet, View, TouchableOpacity, Text, Linking, Alert, AppState, AppStateStatus } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import WalletWebView from '@/components/WalletWebView';
-
-// Configure your backend URL from environment variable
-const BACKEND_URL =  'https://2qpfn6bb-3001.inc1.devtunnels.ms';
-const DAPP_URL = `${BACKEND_URL}/index.html`;
+import { io, Socket } from 'socket.io-client';
+import { deepLinkService, formatAddress, formatSessionId } from '@/services/deeplink.service';
+import type { ParsedDeepLink } from '@/services/deeplink.service';
+import { BACKEND_URL, DAPP_URL, SOCKET_CONFIG, METAMASK_CONFIG } from '@/config/app.config';
 
 export default function HomeScreen() {
-  const [showWebView, setShowWebView] = useState(false);
+  const [showWebView, setShowWebView] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
   const [userAddress, setUserAddress] = useState<string | null>(null);
+  const [webViewKey, setWebViewKey] = useState(0);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const socketRef = useRef<Socket | null>(null);
+  const appState = useRef(AppState.currentState);
+
+  // Deep link handler for wallet connection
+  useEffect(() => {
+    console.log('[HomeScreen] 🎧 Setting up deep link listeners...');
+
+    const handleWalletConnection = async (link: ParsedDeepLink) => {
+      console.log('[HomeScreen] 🎉 Wallet connection deep link received:', link);
+      
+      const { sid, address, error } = link.params;
+
+      if (error) {
+        Alert.alert(
+          '❌ Connection Error',
+          `Failed to connect wallet: ${error}`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      if (sid) {
+        console.log('[HomeScreen] ✅ Session ID received:', sid);
+        setSessionId(sid);
+        
+        // If we have an address directly from the deep link
+        if (address) {
+          setAuthenticated(true);
+          setUserAddress(address);
+          Alert.alert(
+            '✅ Wallet Connected!',
+            `Address: ${formatAddress(address)}\n\nYour wallet has been successfully connected.`,
+            [{ text: 'OK' }]
+          );
+        } else {
+          // Show waiting message
+          Alert.alert(
+            '⏳ Connection Initiated',
+            `Session: ${formatSessionId(sid)}\n\nWaiting for wallet confirmation...`,
+            [{ text: 'OK' }]
+          );
+        }
+      }
+    };
+
+    const handleTransaction = async (link: ParsedDeepLink) => {
+      console.log('[HomeScreen] 💸 Transaction deep link received:', link);
+      
+      const { txHash } = link.params;
+      if (txHash) {
+        Alert.alert(
+          '✅ Transaction Complete',
+          `Transaction Hash: ${txHash.substring(0, 10)}...${txHash.substring(txHash.length - 8)}`,
+          [{ text: 'OK' }]
+        );
+      }
+    };
+
+    const handleError = async (link: ParsedDeepLink) => {
+      console.error('[HomeScreen] ❌ Error deep link received:', link);
+      
+      Alert.alert(
+        '❌ Error',
+        link.params.error || 'An unknown error occurred',
+        [{ text: 'OK' }]
+      );
+    };
+
+    // Register listeners
+    deepLinkService.on('session', handleWalletConnection);
+    deepLinkService.on('transaction', handleTransaction);
+    deepLinkService.on('error', handleError);
+
+    // Cleanup
+    return () => {
+      console.log('[HomeScreen] 🧹 Removing deep link listeners...');
+      deepLinkService.off('session', handleWalletConnection);
+      deepLinkService.off('transaction', handleTransaction);
+      deepLinkService.off('error', handleError);
+    };
+  }, []);
+
+  // App state and socket management
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      if (
+        appState.current.match(/inactive|background/) &&
+        nextAppState === 'active'
+      ) {
+        // App has come to the foreground - reload webview to check for wallet
+        console.log('[HomeScreen] 📱 App returned to foreground, reloading WebView');
+        setWebViewKey(prev => prev + 1);
+      }
+      appState.current = nextAppState;
+    });
+
+    return () => {
+      subscription.remove();
+      // Cleanup socket on unmount
+      if (socketRef.current) {
+        console.log('[HomeScreen] 🧹 Cleaning up socket connection');
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    };
+  }, []);
 
   const handleConnectWallet = () => {
     Alert.alert(
@@ -34,56 +142,168 @@ export default function HomeScreen() {
 
   const handleConnectMetaMask = async () => {
     try {
-      // MetaMask deep link - use the URL without protocol for better compatibility
-      const urlWithoutProtocol = DAPP_URL.replace(/^https?:\/\//, '');
-      const metaMaskDeepLink = `https://metamask.app.link/dapp/${urlWithoutProtocol}`;
+      console.log('🚀 [CONNECT] Creating new session...');
       
-      // Alternative: Direct browser link (fallback)
-      const directLink = `metamask://dapp/${urlWithoutProtocol}`;
+      // Step 1: Create a new session on the backend
+      const response = await fetch(`${BACKEND_URL}/api/session/new`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
       
+      const { sessionId: newSessionId, nonce } = await response.json();
+      console.log('✅ [SESSION] Created:', newSessionId);
+      console.log('✅ [NONCE] Received:', nonce);
+      
+      // Step 2: Set the session ID
+      setSessionId(newSessionId);
+      
+      // Step 3: Setup polling FIRST (primary method for devtunnel)
+      console.log('[RN] 🔍 Starting session status polling...');
+      const pollInterval = setInterval(async () => {
+        if (authenticated) {
+          // Already authenticated, stop polling
+          clearInterval(pollInterval);
+          return;
+        }
+        
+        try {
+          console.log('[RN] 🔍 Polling session status...');
+          const statusResponse = await fetch(`${BACKEND_URL}/api/session/${newSessionId}`);
+          
+          if (statusResponse.ok) {
+            const sessionData = await statusResponse.json();
+            
+            if (sessionData.connected && sessionData.address) {
+              console.log('✅ [RN] Session connected via polling:', sessionData.address);
+              clearInterval(pollInterval);
+              
+              setAuthenticated(true);
+              setUserAddress(sessionData.address);
+              
+              Alert.alert(
+                '✅ Wallet Connected!',
+                `Address: ${sessionData.address.substring(0, 6)}...${sessionData.address.substring(sessionData.address.length - 4)}\n\nYou can now use all wallet features.`,
+                [{ text: 'OK' }]
+              );
+            }
+          }
+        } catch (err) {
+          console.error('[RN] ⚠️ Poll error:', err);
+        }
+      }, 2000); // Poll every 2 seconds
+      
+      // Stop polling after 2 minutes (60 attempts)
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        console.log('[RN] ⏱️ Polling timeout - stopped checking session status');
+      }, 120000);
+      
+      // Step 4: Connect socket (secondary/backup method)
+      console.log('[RN] 🔌 Attempting Socket.IO connection to:', SOCKET_CONFIG.url);
+      try {
+        const socket = io(SOCKET_CONFIG.url, {
+          ...SOCKET_CONFIG.options,
+          extraHeaders: {
+            'x-client': 'react-native'
+          }
+        });
+        
+        socketRef.current = socket;
+        
+        socket.on('connect', () => {
+          console.log('✅ [RN] Socket connected:', socket.id);
+          console.log('[RN] Joining session room:', newSessionId);
+          socket.emit('join', newSessionId);
+        });
+        
+        socket.on('connect_error', (error: Error) => {
+          console.error('❌ [RN] Socket connection error:', error.message);
+          console.log('[RN] 📡 Falling back to polling only...');
+        });
+        
+        socket.on('reconnect', (attemptNumber: number) => {
+          console.log(`🔄 [RN] Socket reconnected after ${attemptNumber} attempts`);
+          console.log('[RN] Rejoining session room:', newSessionId);
+          socket.emit('join', newSessionId);
+        });
+        
+        socket.on('session:connected', ({ address }: { address: string }) => {
+          console.log('✅ [RN] Wallet connected via socket:', address);
+          clearInterval(pollInterval);
+          setAuthenticated(true);
+          setUserAddress(address);
+          Alert.alert(
+            '✅ Wallet Connected!',
+            `Address: ${address.substring(0, 6)}...${address.substring(address.length - 4)}\n\nYou can now use all wallet features.`,
+            [{ text: 'OK' }]
+          );
+        });
+        
+        socket.on('disconnect', (reason: string) => {
+          console.log('🔌 [RN] Socket disconnected:', reason);
+        });
+      } catch (err) {
+        console.error('❌ [RN] Failed to initialize socket:', err);
+        console.log('[RN] 📡 Continuing with polling only...');
+      }
+      
+      // Step 5: Show WebView
+      setShowWebView(true);
+      
+      // Step 6: Build MetaMask deep link with session ID
+      const dappUrlWithSession = `${DAPP_URL}?sid=${newSessionId}`;
+      const urlWithSessionNoProtocol = dappUrlWithSession.replace(/^https?:\/\//, '');
+      const metaMaskDeepLink = `${METAMASK_CONFIG.scheme}/${urlWithSessionNoProtocol}`;
+      
+      console.log('🦊 [METAMASK] Opening with session:', metaMaskDeepLink);
+      
+      // Step 8: Open MetaMask
       Alert.alert(
-        'Open in MetaMask Browser',
-        `URL: ${DAPP_URL}\n\nNote: MetaMask requires HTTPS for remote connections. For local testing with HTTP, you may need to use a tunneling service like ngrok.`,
+        'Connect Wallet',
+        'Opening MetaMask browser...\n\n1. Connect your wallet in MetaMask\n2. Sign the login message\n3. You\'ll be notified when connected!',
         [
           {
-            text: 'Try MetaMask Link',
+            text: 'Open MetaMask',
             onPress: async () => {
               try {
-                console.log('Opening MetaMask with:', metaMaskDeepLink);
-                await Linking.openURL(metaMaskDeepLink);
-              } catch (err) {
-                console.error('Failed with app link, trying direct:', err);
-                try {
-                  await Linking.openURL(directLink);
-                } catch {
-                  Alert.alert(
-                    'MetaMask Not Installed',
-                    'Please install MetaMask mobile app from your app store.',
-                    [{ text: 'OK' }]
-                  );
+                // Check if the URL can be opened first
+                const canOpen = await Linking.canOpenURL(metaMaskDeepLink);
+                console.log('[METAMASK] Can open URL:', canOpen);
+                
+                if (canOpen) {
+                  await Linking.openURL(metaMaskDeepLink);
+                  console.log('✅ [METAMASK] Opened successfully');
+                } else {
+                  throw new Error('MetaMask app not found or URL cannot be opened');
                 }
+              } catch (err) {
+                console.error('❌ [METAMASK] Failed to open:', err);
+                Alert.alert(
+                  'Cannot Open MetaMask',
+                  'Please make sure MetaMask mobile app is installed. You can download it from:\n\n• Google Play Store (Android)\n• App Store (iOS)',
+                  [{ text: 'OK' }]
+                );
               }
             }
           },
-          {
-            text: 'Try Embedded Browser',
-            onPress: () => {
-              Alert.alert(
-                'Limited Functionality',
-                'The embedded browser may not detect your wallet. For best experience, use "Open in MetaMask" option.',
-                [
-                  { text: 'Continue Anyway', onPress: () => setShowWebView(true) },
-                  { text: 'Cancel', style: 'cancel' }
-                ]
-              );
+          { text: 'Cancel', style: 'cancel', onPress: () => {
+            setShowWebView(false);
+            setSessionId(null);
+            
+            // Clean up socket if created
+            if (socketRef.current) {
+              console.log('[RN] Cancelling - disconnecting socket');
+              socketRef.current.disconnect();
+              socketRef.current = null;
             }
-          },
-          { text: 'Cancel', style: 'cancel' }
+          }}
         ]
       );
     } catch (error) {
-      console.error('Error opening MetaMask:', error);
-      Alert.alert('Error', 'Failed to open MetaMask.');
+      console.error('❌ [ERROR] Failed to create session:', error);
+      Alert.alert('Error', 'Failed to create session. Please try again.');
     }
   };
 
@@ -100,10 +320,118 @@ export default function HomeScreen() {
     console.error('Wallet error:', error);
   };
 
+  const handleOpenMetaMask = async () => {
+    try {
+      const urlWithoutProtocol = DAPP_URL.replace(/^https?:\/\//, '');
+      const metaMaskDeepLink = `https://metamask.app.link/dapp/${urlWithoutProtocol}`;
+      
+      Alert.alert(
+        'Open in MetaMask',
+        'You will be redirected to MetaMask to connect your wallet. After connecting, you can return to this app.',
+        [
+          {
+            text: 'Open MetaMask',
+            onPress: async () => {
+              try {
+                console.log('Opening MetaMask with:', metaMaskDeepLink);
+                
+                // Check if the URL can be opened first
+                const canOpen = await Linking.canOpenURL(metaMaskDeepLink);
+                console.log('[METAMASK] Can open URL:', canOpen);
+                
+                if (!canOpen) {
+                  throw new Error('MetaMask app not found or URL cannot be opened');
+                }
+                
+                await Linking.openURL(metaMaskDeepLink);
+                
+                // Show info that user can return
+                setTimeout(() => {
+                  Alert.alert(
+                    'Return to App',
+                    'After connecting in MetaMask, please return to this app to continue.',
+                    [{ text: 'OK' }]
+                  );
+                }, 1000);
+              } catch (err) {
+                console.error('Failed to open MetaMask:', err);
+                Alert.alert(
+                  'MetaMask Not Installed',
+                  'Please install MetaMask mobile app from your app store.',
+                  [{ text: 'OK' }]
+                );
+              }
+            }
+          },
+          {
+            text: 'Cancel',
+            style: 'cancel'
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Error opening MetaMask:', error);
+      Alert.alert('Error', 'Failed to open MetaMask.');
+    }
+  };
+
+  const handleCheckStatus = async () => {
+    if (!sessionId) return;
+    
+    try {
+      console.log('[RN] 🔍 Manually checking session status for:', sessionId);
+      const statusResponse = await fetch(`${BACKEND_URL}/api/session/${sessionId}`);
+      
+      if (statusResponse.ok) {
+        const sessionData = await statusResponse.json();
+        console.log('[RN] 📊 Session data:', sessionData);
+        
+        if (sessionData.connected && sessionData.address) {
+          console.log('✅ [RN] Session is connected!');
+          setAuthenticated(true);
+          setUserAddress(sessionData.address);
+          
+          Alert.alert(
+            '✅ Wallet Connected!',
+            `Address: ${sessionData.address.substring(0, 6)}...${sessionData.address.substring(sessionData.address.length - 4)}\n\nYou can now use all wallet features.`,
+            [{ text: 'OK' }]
+          );
+        } else {
+          Alert.alert(
+            '⏳ Still Waiting',
+            `Session Status: ${sessionData.connected ? 'Connected' : 'Pending'}\n\nPlease complete the connection in MetaMask and try again.`,
+            [{ text: 'OK' }]
+          );
+        }
+      } else {
+        Alert.alert(
+          '❌ Session Not Found',
+          'Could not find the session. Please try connecting again.',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (err) {
+      console.error('[RN] ⚠️ Status check error:', err);
+      Alert.alert(
+        '❌ Check Failed',
+        'Failed to check connection status. Please try again.',
+        [{ text: 'OK' }]
+      );
+    }
+  };
+
   const handleDisconnect = () => {
     setShowWebView(false);
     setAuthenticated(false);
     setUserAddress(null);
+    setSessionId(null);
+    
+    // Disconnect socket
+    if (socketRef.current) {
+      console.log('[RN] Disconnecting socket');
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
   };
 
   if (showWebView) {
@@ -113,17 +441,24 @@ export default function HomeScreen() {
           <TouchableOpacity onPress={handleDisconnect} style={styles.backButton}>
             <Text style={styles.backButtonText}>← Back</Text>
           </TouchableOpacity>
-          {authenticated && userAddress && (
+          {authenticated && userAddress ? (
             <Text style={styles.addressText}>
               {userAddress.substring(0, 6)}...{userAddress.substring(userAddress.length - 4)}
             </Text>
-          )}
+          ) : sessionId ? (
+            <TouchableOpacity onPress={handleCheckStatus} style={styles.checkButton}>
+              <Text style={styles.checkButtonText}>🔄 Check Status</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
         <WalletWebView
-          dappUrl={DAPP_URL}
+          key={webViewKey}
+          dappUrl={sessionId ? `${DAPP_URL}?sid=${sessionId}` : DAPP_URL}
+          sessionId={sessionId || undefined}
           onAuthenticated={handleAuthenticated}
           onTransactionSent={handleTransactionSent}
           onError={handleError}
+          onOpenMetaMask={handleOpenMetaMask}
         />
       </View>
     );
@@ -154,48 +489,6 @@ export default function HomeScreen() {
             <Text style={styles.secondaryButtonText}>Try Embedded Browser (Limited)</Text>
           </TouchableOpacity>
         </View>
-
-        <View style={styles.infoContainer}>
-          <ThemedText type="subtitle" style={styles.infoTitle}>
-            ⚠️ HTTPS Required for MetaMask:
-          </ThemedText>
-          <ThemedText style={styles.infoText}>
-            • MetaMask requires HTTPS for security
-          </ThemedText>
-          <ThemedText style={styles.infoText}>
-            • Current backend: {BACKEND_URL}
-          </ThemedText>
-          <ThemedText style={styles.infoText}>
-            • For production, use a proper domain with SSL
-          </ThemedText>
-          <ThemedText style={styles.infoText}>
-            • For testing, use ngrok to create HTTPS tunnel
-          </ThemedText>
-        </View>
-
-        <View style={styles.featuresContainer}>
-          <ThemedText type="subtitle" style={styles.infoTitle}>
-            Features:
-          </ThemedText>
-          <ThemedText style={styles.infoText}>
-            • Connect Ethereum wallet securely
-          </ThemedText>
-          <ThemedText style={styles.infoText}>
-            • Sign messages for authentication
-          </ThemedText>
-          <ThemedText style={styles.infoText}>
-            • Send Ethereum transactions
-          </ThemedText>
-          <ThemedText style={styles.infoText}>
-            • Real-time transaction tracking
-          </ThemedText>
-        </View>
-
-        <View style={styles.noteContainer}>
-          <ThemedText style={styles.noteText}>
-            Backend: {BACKEND_URL}
-          </ThemedText>
-        </View>
       </View>
     </ThemedView>
   );
@@ -222,6 +515,19 @@ const styles = StyleSheet.create({
   backButtonText: {
     color: '#fff',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  checkButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  checkButtonText: {
+    color: '#fff',
+    fontSize: 14,
     fontWeight: '600',
   },
   addressText: {

@@ -73,6 +73,16 @@
     .btn-secondary:hover {
       background: #e0e0e0;
     }
+
+    .btn-success {
+      background: #28a745;
+      color: white;
+    }
+
+    .btn-success:hover {
+      background: #218838;
+      transform: translateY(-2px);
+    }
     
     button:disabled {
       opacity: 0.5;
@@ -182,11 +192,15 @@
   <div class="container">
     <h1>🦊 Wallet Connect</h1>
     <p class="subtitle">Connect your Ethereum wallet to continue</p>
+    <div id="debugInfo" style="padding: 10px; background: #fff3cd; border-radius: 8px; margin-bottom: 16px; font-size: 12px; display: none;">
+      <strong>Debug Info:</strong><br>
+      Session ID: <span id="debugSessionId">Not found</span>
+    </div>
     
     <div id="connectSection">
       <button id="connectButton" class="btn-primary">Connect Wallet</button>
-      <div style="margin-top: 16px; padding: 12px; background: #fff3cd; border-radius: 8px; font-size: 13px; color: #856404;">
-        <strong>📱 Mobile Users:</strong> For best experience, open this page in MetaMask mobile browser by tapping "Open in MetaMask" in the app.
+      <div style="margin-top: 16px; padding: 12px; background: #d1ecf1; border-radius: 8px; font-size: 13px; color: #0c5460;">
+        <strong>📱 How it works:</strong> Click "Connect Wallet" to open MetaMask. After connecting, return here to access your wallet features.
       </div>
     </div>
     
@@ -194,6 +208,13 @@
       <div class="wallet-info">
         <label>Connected Address</label>
         <div class="value" id="addressDisplay"></div>
+      </div>
+      
+      <div id="returnToAppSection" class="hidden" style="margin-bottom: 12px;">
+        <button id="returnToAppButton" class="btn-success">✅ Return to App</button>
+        <div style="margin-top: 8px; padding: 10px; background: #d4edda; border-radius: 8px; font-size: 12px; color: #155724;">
+          Connection successful! You can now return to the app and use all wallet features.
+        </div>
       </div>
       
       <button id="signMessageButton" class="btn-primary">Sign Login Message</button>
@@ -220,11 +241,27 @@
     // Configuration
     const API_BASE_URL = window.location.origin;
     
+    // Read sessionId from URL parameters
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionIdFromUrl = urlParams.get('sid');
+    
     let provider = null;
     let signer = null;
     let currentAddress = null;
     let currentNonce = null;
-    let currentSessionId = null;
+    let currentSessionId = sessionIdFromUrl || null;
+    
+    console.log('🔍 [INIT] Page URL:', window.location.href);
+    console.log('🔍 [INIT] Session ID from URL:', currentSessionId);
+    console.log('🔍 [INIT] URL params:', window.location.search);
+
+    // Show debug info
+    const debugInfo = document.getElementById('debugInfo');
+    const debugSessionId = document.getElementById('debugSessionId');
+    if (currentSessionId) {
+      debugInfo.style.display = 'block';
+      debugSessionId.textContent = currentSessionId;
+    }
 
     // Elements
     const connectSection = document.getElementById('connectSection');
@@ -236,6 +273,8 @@
     const addressDisplay = document.getElementById('addressDisplay');
     const statusDiv = document.getElementById('status');
     const txSection = document.getElementById('txSection');
+    const returnToAppButton = document.getElementById('returnToAppButton');
+    const returnToAppSection = document.getElementById('returnToAppSection');
 
     // Utility functions
     function showStatus(message, type = 'info') {
@@ -274,22 +313,23 @@
         const detectedProvider = detectProvider();
         
         if (!detectedProvider) {
-          showStatus('⚠️ No Ethereum wallet detected in this browser. Please close this page and tap "🦊 Open in MetaMask Browser" button in the app for full functionality.', 'error');
+          showStatus('No wallet detected. Opening MetaMask...', 'info');
           
-          // Show additional guidance
-          connectButton.textContent = '❌ No Wallet Detected';
-          connectButton.disabled = true;
-          connectButton.style.opacity = '0.5';
-          
-          // Notify React Native that no wallet was found
+          // Notify React Native to open MetaMask
           postMessageToRN({
-            type: 'error',
-            error: 'No wallet detected',
-            message: 'Please open in MetaMask mobile browser'
+            type: 'noWalletDetected',
+            message: 'Opening MetaMask for wallet connection'
           });
           
+          // Update button to show what's happening
+          connectButton.textContent = '🦊 Opening MetaMask...';
+          connectButton.disabled = true;
+          
+          // After a delay, reset button and show return instruction
           setTimeout(() => {
-            showStatus('👈 Go back and use "Open in MetaMask Browser" instead', 'info');
+            connectButton.textContent = 'Connect Wallet';
+            connectButton.disabled = false;
+            showStatus('💡 After connecting in MetaMask, return to this app and click "Connect Wallet" again.', 'info');
           }, 3000);
           
           return;
@@ -311,6 +351,12 @@
         addressDisplay.textContent = currentAddress;
         connectSection.classList.add('hidden');
         connectedSection.classList.remove('hidden');
+        
+        // Check if we're NOT in React Native WebView (meaning we're in MetaMask browser)
+        const isMetaMaskBrowser = !window.ReactNativeWebView && detectedProvider;
+        if (isMetaMaskBrowser) {
+          returnToAppSection.classList.remove('hidden');
+        }
         
         showStatus('Wallet connected successfully!', 'success');
         
@@ -335,11 +381,35 @@
           return;
         }
 
-        showStatus('Getting nonce from server...');
+        showStatus('Getting session from server...');
         
-        // Get nonce from backend
-        const nonceResponse = await fetch(`${API_BASE_URL}/api/nonce`);
-        const { nonce, sessionId } = await nonceResponse.json();
+        // If we have a sessionId from URL, fetch that session's info
+        // Otherwise create a new session (legacy flow)
+        let nonce, sessionId;
+        
+        if (currentSessionId) {
+          console.log('🔑 [AUTH] Using session ID from URL:', currentSessionId);
+          // Fetch the existing session created by RN app
+          const sessionResponse = await fetch(`${API_BASE_URL}/api/session/${currentSessionId}`);
+          if (!sessionResponse.ok) {
+            showStatus('Session expired or invalid. Please try again.', 'error');
+            console.error('❌ [AUTH] Session not found:', currentSessionId);
+            return;
+          }
+          const data = await sessionResponse.json();
+          nonce = data.nonce;
+          sessionId = currentSessionId; // Use the one from URL
+          console.log('✅ [AUTH] Retrieved session info:', { sessionId, hasNonce: !!nonce });
+        } else {
+          // Create new session using new endpoint
+          const sessionResponse = await fetch(`${API_BASE_URL}/api/session/new`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          const data = await sessionResponse.json();
+          nonce = data.nonce;
+          sessionId = data.sessionId;
+        }
         
         currentNonce = nonce;
         currentSessionId = sessionId;
@@ -352,7 +422,13 @@
         
         showStatus('Verifying signature...');
         
-        // Send to React Native for verification
+        console.log('📤 [AUTH] Sending verification with session:', {
+          address: currentAddress,
+          sessionId,
+          signatureLength: signature?.length
+        });
+        
+        // Send to React Native for verification (legacy support)
         postMessageToRN({
           type: 'login',
           address: currentAddress,
@@ -361,7 +437,7 @@
           sessionId
         });
         
-        // Also verify directly with backend
+        // Verify with backend - this will emit socket event to RN
         const verifyResponse = await fetch(`${API_BASE_URL}/api/verify`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -376,8 +452,26 @@
         const result = await verifyResponse.json();
         
         if (result.success) {
-          showStatus('✅ Authentication successful!', 'success');
-          txSection.classList.remove('hidden');
+          showStatus('✅ Authentication successful! Returning to app...', 'success');
+          
+          // Construct deep link return URI
+          const returnUri = `myapp://connected?sid=${encodeURIComponent(currentSessionId)}`;
+          
+          console.log('🔗 Redirecting to:', returnUri);
+          
+          // Attempt JavaScript redirect
+          window.location.href = returnUri;
+          
+          // Fallback: Show clickable button after short delay
+          setTimeout(() => {
+            document.body.innerHTML = `
+              <div style="padding:20px;font-family: sans-serif;text-align:center;">
+                <h2 style="color:#28a745;">✅ You're Connected!</h2>
+                <p style="margin:20px 0;color:#666;">If you're not automatically redirected, tap the button below:</p>
+                <a href="${returnUri}" style="display:inline-block;padding:16px 32px;background:#4CAF50;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;">Return to App</a>
+                <p style="margin-top:20px;color:#999;font-size:14px;">Or manually switch back to the app.</p>
+              </div>`;
+          }, 800);
         } else {
           showStatus(`Authentication failed: ${result.error}`, 'error');
         }
@@ -465,6 +559,7 @@
       connectSection.classList.remove('hidden');
       connectedSection.classList.add('hidden');
       txSection.classList.add('hidden');
+      returnToAppSection.classList.add('hidden');
       
       hideStatus();
       
@@ -473,11 +568,31 @@
       });
     }
 
+    // Return to app function
+    function returnToApp() {
+      // For iOS
+      const iosScheme = 'exp://192.168.1.100:8081'; // Expo dev URL
+      // For Android  
+      const androidScheme = 'exp://192.168.1.100:8081';
+      
+      // Try to detect platform and use appropriate scheme
+      const scheme = /iPhone|iPad|iPod/.test(navigator.userAgent) ? iosScheme : androidScheme;
+      
+      // Attempt to return to app
+      window.location.href = scheme;
+      
+      // Show a message after a short delay if still here
+      setTimeout(() => {
+        showStatus('💡 Please manually return to the app to continue.', 'info');
+      }, 1000);
+    }
+
     // Event listeners
     connectButton.addEventListener('click', connectWallet);
     signMessageButton.addEventListener('click', signLoginMessage);
     sendTxButton.addEventListener('click', sendTransaction);
     disconnectButton.addEventListener('click', disconnectWallet);
+    returnToAppButton.addEventListener('click', returnToApp);
 
     // Listen for account changes
     if (window.ethereum) {
@@ -501,10 +616,30 @@
       });
     }
 
+    // Check if we're in a wallet browser vs embedded
+    function checkEnvironment() {
+      const isReactNativeWebView = !!window.ReactNativeWebView;
+      const hasEthereum = !!detectProvider();
+      
+      if (!isReactNativeWebView && hasEthereum) {
+        // We're in MetaMask browser - show success message
+        const connectSection = document.getElementById('connectSection');
+        const infoDiv = connectSection.querySelector('div');
+        if (infoDiv) {
+          infoDiv.style.background = '#d4edda';
+          infoDiv.style.color = '#155724';
+          infoDiv.innerHTML = '<strong>✅ MetaMask Detected!</strong> Click "Connect Wallet" to continue. After connecting, you can return to the app.';
+        }
+      }
+    }
+
     // Auto-connect if wallet is already connected
     if (window.ethereum && window.ethereum.selectedAddress) {
       connectWallet();
     }
+
+    // Run environment check on load
+    checkEnvironment();
   </script>
 </body>
 </html>
