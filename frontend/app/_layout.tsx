@@ -18,6 +18,20 @@ export default function RootLayout() {
     // Initialize deep link service
     console.log('[RootLayout] 🚀 Initializing deep link service...');
     
+    // Register listeners BEFORE initializing to catch cold-start links
+    deepLinkService.on('session', (parsed) => {
+      console.log('[RootLayout] 🎯 Session deep link received:', parsed);
+      // The actual tab screens will handle this
+    });
+
+    deepLinkService.on('connect', (parsed) => {
+      console.log('[RootLayout] 🎯 Connect deep link received:', parsed);
+    });
+
+    deepLinkService.on('link', (parsed) => {
+      console.log('[RootLayout] 🎯 Generic deep link received:', parsed);
+    });
+    
     deepLinkService.initialize().catch((error) => {
       console.error('[RootLayout] ❌ Failed to initialize deep link service:', error);
     });

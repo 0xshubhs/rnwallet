@@ -267,10 +267,18 @@ class DeepLinkService {
 
       // Emit specific events based on action or params
       if (parsed.params.action) {
+        console.log(`[DeepLink] 📤 Emitting action event: "${parsed.params.action}"`);
         this.emit(parsed.params.action, parsed);
-      } else if (parsed.params.sid) {
+      }
+      
+      // Always emit session event if sid is present (regardless of action)
+      if (parsed.params.sid) {
+        console.log('[DeepLink] 📤 Emitting session event with sid:', parsed.params.sid);
         this.emit('session', parsed);
-      } else if (parsed.params.txHash) {
+      }
+      
+      if (parsed.params.txHash) {
+        console.log('[DeepLink] 📤 Emitting transaction event');
         this.emit('transaction', parsed);
       }
 

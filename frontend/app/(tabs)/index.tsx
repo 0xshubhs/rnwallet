@@ -84,13 +84,15 @@ export default function HomeScreen() {
 
     // Register listeners
     deepLinkService.on('session', handleWalletConnection);
+    deepLinkService.on('connect', handleWalletConnection); // Also listen for connect action
     deepLinkService.on('transaction', handleTransaction);
     deepLinkService.on('error', handleError);
 
     // Cleanup
     return () => {
-      console.log('[HomeScreen] 🧹 Removing deep link listeners...');
+      console.log('[HomeScreen] Removing deep link listeners...');
       deepLinkService.off('session', handleWalletConnection);
+      deepLinkService.off('connect', handleWalletConnection);
       deepLinkService.off('transaction', handleTransaction);
       deepLinkService.off('error', handleError);
     };

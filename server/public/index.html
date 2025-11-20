@@ -454,24 +454,52 @@
         if (result.success) {
           showStatus('✅ Authentication successful! Returning to app...', 'success');
           
-          // Construct deep link return URI
-          const returnUri = `myapp://connected?sid=${encodeURIComponent(currentSessionId)}`;
+          // Construct deep link return URI with all parameters
+          const returnUri = `myapp://connected?action=connect&sid=${encodeURIComponent(currentSessionId)}&address=${encodeURIComponent(currentAddress)}`;
           
-          console.log('🔗 Redirecting to:', returnUri);
+          console.log('🔗 [REDIRECT] Attempting redirect to:', returnUri);
+          console.log('🔗 [REDIRECT] Session ID:', currentSessionId);
+          console.log('🔗 [REDIRECT] Address:', currentAddress);
           
-          // Attempt JavaScript redirect
-          window.location.href = returnUri;
+          // Multiple redirect strategies for maximum compatibility
           
-          // Fallback: Show clickable button after short delay
+          // Strategy 1: Direct location change
+          try {
+            window.location.href = returnUri;
+          } catch (e) {
+            console.error('❌ window.location.href failed:', e);
+          }
+          
+          // Strategy 2: Create and click invisible link (works better on some Android browsers)
+          setTimeout(() => {
+            try {
+              const a = document.createElement('a');
+              a.href = returnUri;
+              a.style.display = 'none';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              console.log('✅ [REDIRECT] Clicked invisible link');
+            } catch (e) {
+              console.error('❌ Invisible link click failed:', e);
+            }
+          }, 100);
+          
+          // Strategy 3: Show manual fallback UI after delay
           setTimeout(() => {
             document.body.innerHTML = `
-              <div style="padding:20px;font-family: sans-serif;text-align:center;">
-                <h2 style="color:#28a745;">✅ You're Connected!</h2>
-                <p style="margin:20px 0;color:#666;">If you're not automatically redirected, tap the button below:</p>
-                <a href="${returnUri}" style="display:inline-block;padding:16px 32px;background:#4CAF50;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;">Return to App</a>
-                <p style="margin-top:20px;color:#999;font-size:14px;">Or manually switch back to the app.</p>
+              <div style="padding:20px;font-family: sans-serif;text-align:center;background:#f0f9ff;min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;">
+                <div style="background:white;border-radius:16px;padding:32px;max-width:400px;box-shadow:0 4px 12px rgba(0,0,0,0.1);">
+                  <h2 style="color:#28a745;margin-bottom:16px;">✅ You're Connected!</h2>
+                  <p style="margin:20px 0;color:#666;line-height:1.6;">Your wallet has been successfully authenticated.<br><br>If you weren't automatically redirected, tap the button below:</p>
+                  <a href="${returnUri}" style="display:inline-block;padding:16px 32px;background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);color:#fff;border-radius:12px;text-decoration:none;font-weight:600;font-size:16px;margin-top:16px;box-shadow:0 4px 12px rgba(102,126,234,0.4);transition:transform 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">🚀 Return to App</a>
+                  <p style="margin-top:24px;color:#999;font-size:13px;">Session: ${currentSessionId.substring(0,10)}...</p>
+                  <p style="margin-top:8px;color:#999;font-size:13px;">Address: ${currentAddress.substring(0,8)}...${currentAddress.substring(currentAddress.length-6)}</p>
+                  <hr style="margin:24px 0;border:none;border-top:1px solid #eee;">
+                  <p style="color:#666;font-size:12px;line-height:1.5;">💡 Tip: You can manually switch back to your app if the button doesn't work.</p>
+                </div>
               </div>`;
-          }, 800);
+          }, 1500);
         } else {
           showStatus(`Authentication failed: ${result.error}`, 'error');
         }
