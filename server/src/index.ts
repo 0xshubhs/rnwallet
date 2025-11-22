@@ -85,13 +85,14 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(PORT, () => {
+server.listen(Number(PORT), '0.0.0.0', () => {
   console.log('\n===========================================');
   console.log('🚀 Server Started Successfully');
   console.log('===========================================');
   console.log(`📡 HTTP Server running on port ${PORT}`);
   console.log(`🔌 Socket.IO Server ready`);
   console.log(`🌐 Local: http://localhost:${PORT}`);
+  console.log(`🌐 Android Emulator: http://10.0.2.2:${PORT}`);
   console.log(`⏰ Started at: ${new Date().toISOString()}`);
   console.log('===========================================\n');
 });
