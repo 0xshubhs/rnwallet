@@ -1,18 +1,45 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { StyleSheet, View, TouchableOpacity, Text, Alert, AppState, AppStateStatus, Platform, ScrollView } from 'react-native';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import WalletWebView from '@/components/WalletWebView';
-import WalletSelectorSheet, { WalletSelectorSheetRef } from '@/components/WalletSelectorSheet';
-import { io, Socket } from 'socket.io-client';
-import { deepLinkService, formatAddress, formatSessionId } from '@/services/deeplink.service';
-import type { ParsedDeepLink } from '@/services/deeplink.service';
-import { walletService, WalletInfo } from '@/services/wallet.service';
-import { erc4337Service } from '@/services/erc4337.service';
-import { dappFeaturesService, TokenBalance } from '@/services/dapp.service';
-import { BACKEND_URL, DAPP_URL, SOCKET_CONFIG } from '@/config/app.config';
-import { ethers } from 'ethers';
+// frontend/app/(tabs)/index.tsx
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { View, Text, Button, ActivityIndicator, Alert, TextInput, ScrollView, StyleSheet, TouchableOpacity, AppState, Platform } from 'react-native';
+import type { AppStateStatus } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import Constants from 'expo-constants';
+import { io, Socket } from 'socket.io-client';
+import { ThemedView } from '../../components/themed-view';
+import { ThemedText } from '../../components/themed-text';
+import WalletSelectorSheet, { WalletSelectorSheetRef } from '../../components/WalletSelectorSheet';
+import WalletWebView from '../../components/WalletWebView';
+import { walletService, WalletInfo } from '../../services/wallet.service';
+import { deepLinkService, ParsedDeepLink } from '../../services/deeplink.service';
+import { dappFeaturesService, TokenBalance } from '../../services/dapp.service';
+import { erc4337Service } from '../../services/erc4337.service';
+import { ethers } from 'ethers';
+
+// Utility functions
+const formatAddress = (address: string): string => {
+  return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
+};
+
+const formatSessionId = (sessionId: string): string => {
+  return sessionId.substring(0, 8);
+};
+
+const DAPP_URL = 'https://your-dapp.com'; // Replace with actual dApp URL
+const SOCKET_CONFIG = {
+  url: Constants.expoConfig?.extra?.BACKEND_URL || 'https://2qpfn6bb-3000.inc1.devtunnels.ms/',
+  options: {
+    transports: ['websocket'],
+    reconnection: true,
+  }
+};
+
+const BACKEND_URL =
+  (Constants.expoConfig?.extra?.BACKEND_URL as string) ||
+  'https://2qpfn6bb-3000.inc1.devtunnels.ms/'; // Android emulator → host machine
+
+const RPC_URL =
+  (Constants.expoConfig?.extra?.RPC_URL as string) ||
+  'https://sepolia.infura.io/v3/YOUR_INFURA_KEY';
 
 export default function HomeScreen() {
   const [showWebView, setShowWebView] = useState(false);

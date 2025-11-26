@@ -24,6 +24,13 @@ export const BACKEND_URL = 'https://2qpfn6bb-3000.inc1.devtunnels.ms';  // Publi
 export const DAPP_URL = `${BACKEND_URL}/index.html`;
 
 /**
+ * RPC Provider URL
+ * Default: Ethereum Sepolia testnet via Infura
+ * Replace with your own Infura/Alchemy key or use a different provider
+ */
+export const RPC_URL = 'https://eth-mainnet.g.alchemy.com/v2/W5kdNoY0HYZTWzVCZFK9IVezgogvROws';
+
+/**
  * Socket.IO configuration
  */
 export const SOCKET_CONFIG = {
@@ -182,6 +189,7 @@ export const FEATURES = {
 export default {
   BACKEND_URL,
   DAPP_URL,
+  RPC_URL,
   SOCKET_CONFIG,
   APP_SCHEME,
   DEEP_LINK_HOSTS,
