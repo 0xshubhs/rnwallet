@@ -1,11 +1,13 @@
 import { Image } from 'expo-image';
 import { useEffect, useState } from 'react';
-import { StyleSheet, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, TouchableOpacity, View, ScrollView, Alert, TextInput } from 'react-native';
 
 import { HelloWave } from '@/components/hello-wave';
 import ParallaxScrollView from '@/components/parallax-scroll-view';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { MultichainAssets } from '@/components/multichain-assets';
+import { SendFunds } from '@/components/send-funds';
 import { AppKit, useAccount, useAppKit, useProvider } from '@reown/appkit-react-native';
 import { BrowserProvider, formatEther } from 'ethers';
 
@@ -14,6 +16,11 @@ export default function HomeScreen() {
   const { address, isConnected } = useAccount();
   const { provider } = useProvider();
   const [balance, setBalance] = useState<string | null>(null);
+  const [sendFundsVisible, setSendFundsVisible] = useState(false);
+  const [chainId, setChainId] = useState<number | undefined>(undefined);
+  const [signModalVisible, setSignModalVisible] = useState(false);
+  const [messageToSign, setMessageToSign] = useState('Hello from Meow Wallet!');
+  const [signature, setSignature] = useState<string | null>(null);
 
   // Fetch balance when connected
   useEffect(() => {
@@ -28,6 +35,10 @@ export default function HomeScreen() {
         const balanceWei = await ethersProvider.getBalance(address);
         const balanceEth = formatEther(balanceWei);
         setBalance(parseFloat(balanceEth).toFixed(4));
+        
+        // Get chain ID from provider
+        const network = await ethersProvider.getNetwork();
+        setChainId(Number(network.chainId));
       } catch (error) {
         console.error('Error fetching balance:', error);
       }
@@ -39,6 +50,78 @@ export default function HomeScreen() {
   const handleDisconnect = async () => {
     // Open the modal to show disconnect option
     open();
+  };
+
+  const handleSignMessage = async () => {
+    if (!provider || !address) {
+      Alert.alert('Error', 'Wallet not connected');
+      return;
+    }
+
+    try {
+      const ethersProvider = new BrowserProvider(provider as any);
+      const signer = await ethersProvider.getSigner();
+      
+      // Sign the message - this will prompt MetaMask/wallet for approval
+      const signedMessage = await signer.signMessage(messageToSign);
+      
+      setSignature(signedMessage);
+      Alert.alert(
+        'Message Signed!',
+        `Signature: ${signedMessage.slice(0, 20)}...${signedMessage.slice(-20)}`,
+        [{ text: 'OK' }]
+      );
+    } catch (error: any) {
+      console.error('Error signing message:', error);
+      Alert.alert('Error', error.message || 'Failed to sign message');
+    }
+  };
+
+  const handleSignTypedData = async () => {
+    if (!provider || !address) {
+      Alert.alert('Error', 'Wallet not connected');
+      return;
+    }
+
+    try {
+      const ethersProvider = new BrowserProvider(provider as any);
+      const signer = await ethersProvider.getSigner();
+      
+      // Example EIP-712 typed data
+      const domain = {
+        name: 'Meow Wallet',
+        version: '1',
+        chainId: chainId,
+        verifyingContract: '0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC'
+      };
+
+      const types = {
+        Mail: [
+          { name: 'from', type: 'address' },
+          { name: 'to', type: 'address' },
+          { name: 'contents', type: 'string' }
+        ]
+      };
+
+      const value = {
+        from: address,
+        to: '0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB',
+        contents: 'Hello from Meow Wallet with EIP-712!'
+      };
+
+      // Sign typed data - this will prompt wallet for approval
+      const signedTypedData = await signer.signTypedData(domain, types, value);
+      
+      setSignature(signedTypedData);
+      Alert.alert(
+        'Typed Data Signed!',
+        `Signature: ${signedTypedData.slice(0, 20)}...${signedTypedData.slice(-20)}`,
+        [{ text: 'OK' }]
+      );
+    } catch (error: any) {
+      console.error('Error signing typed data:', error);
+      Alert.alert('Error', error.message || 'Failed to sign typed data');
+    }
   };
 
   return (
@@ -68,16 +151,92 @@ export default function HomeScreen() {
               
               {balance && (
                 <ThemedText style={styles.balance}>
-                  Balance: {balance} ETH
+                  Current Network Balance: {balance} ETH
                 </ThemedText>
               )}
 
-              <TouchableOpacity 
-                style={styles.disconnectButton}
-                onPress={handleDisconnect}
-              >
-                <ThemedText style={styles.buttonText}>Manage Connection</ThemedText>
-              </TouchableOpacity>
+              <View style={styles.buttonRow}>
+                <TouchableOpacity 
+                  style={styles.sendButton}
+                  onPress={() => {
+                    console.log('Send button pressed');
+                    console.log('Provider:', !!provider);
+                    console.log('Address:', address);
+                    console.log('ChainId:', chainId);
+                    setSendFundsVisible(true);
+                  }}
+                >
+                  <ThemedText style={styles.buttonText}>💸 Send</ThemedText>
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={styles.signButton}
+                  onPress={() => setSignModalVisible(true)}
+                >
+                  <ThemedText style={styles.buttonText}>✍️ Sign</ThemedText>
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={styles.disconnectButton}
+                  onPress={handleDisconnect}
+                >
+                  <ThemedText style={styles.buttonText}>⚙️</ThemedText>
+                </TouchableOpacity>
+              </View>
+              
+              {/* Sign Message Section */}
+              {signModalVisible && (
+                <View style={styles.signContainer}>
+                  <ThemedText type="defaultSemiBold" style={styles.signTitle}>
+                    Sign Message
+                  </ThemedText>
+                  
+                  <TextInput
+                    style={styles.messageInput}
+                    value={messageToSign}
+                    onChangeText={setMessageToSign}
+                    placeholder="Enter message to sign"
+                    placeholderTextColor="#999"
+                    multiline
+                  />
+                  
+                  <View style={styles.signButtonRow}>
+                    <TouchableOpacity 
+                      style={styles.signActionButton}
+                      onPress={handleSignMessage}
+                    >
+                      <ThemedText style={styles.buttonText}>
+                        Sign Message
+                      </ThemedText>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity 
+                      style={styles.signTypedButton}
+                      onPress={handleSignTypedData}
+                    >
+                      <ThemedText style={styles.buttonText}>
+                        Sign Typed Data
+                      </ThemedText>
+                    </TouchableOpacity>
+                  </View>
+                  
+                  {signature && (
+                    <View style={styles.signatureContainer}>
+                      <ThemedText type="defaultSemiBold">Last Signature:</ThemedText>
+                      <ThemedText style={styles.signatureText}>
+                        {signature.slice(0, 30)}...{signature.slice(-30)}
+                      </ThemedText>
+                    </View>
+                  )}
+                  
+                  <TouchableOpacity 
+                    style={styles.closeSignButton}
+                    onPress={() => setSignModalVisible(false)}
+                  >
+                    <ThemedText style={styles.buttonText}>Close</ThemedText>
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           ) : (
             <View style={styles.connectContainer}>
@@ -95,27 +254,41 @@ export default function HomeScreen() {
           )}
         </ThemedView>
 
+        {/* Multichain Assets View */}
+        {isConnected && address && (
+          <ThemedView style={styles.multichainContainer}>
+            <MultichainAssets />
+          </ThemedView>
+        )}
+
         <ThemedView style={styles.stepContainer}>
           <ThemedText type="subtitle">Supported Networks</ThemedText>
           <ThemedText>
-            • Ethereum Mainnet{'\n'}
-            • Polygon{'\n'}
-            • Arbitrum{'\n'}
-            • Optimism{'\n'}
-            • Base
+            Mainnets:{'\n'}
+            • Ethereum • Polygon • Arbitrum • Optimism • Base • BSC • Avalanche{'\n\n'}
+            Testnets:{'\n'}
+            • Sepolia • Polygon Amoy • Arbitrum Sepolia • Optimism Sepolia • Base Sepolia
           </ThemedText>
         </ThemedView>
 
-        <ThemedView style={styles.stepContainer}>
-          <ThemedText type="subtitle">Features</ThemedText>
-          <ThemedText>
-            ✓ Multi-wallet support{'\n'}
-            ✓ EVM chain compatibility{'\n'}
-            ✓ Secure connection{'\n'}
-            ✓ Real-time balance updates
-          </ThemedText>
-        </ThemedView>
+        
       </ParallaxScrollView>
+
+      {/* Send Funds Modal - Always render when connected */}
+      {isConnected && address && provider ? (
+        <SendFunds
+          visible={sendFundsVisible}
+          onClose={() => {
+            console.log('Closing send funds modal');
+            setSendFundsVisible(false);
+          }}
+          provider={provider}
+          address={address}
+          currentChainId={chainId}
+        />
+      ) : (
+        sendFundsVisible && console.log('Cannot show SendFunds: ', { isConnected, address: !!address, provider: !!provider })
+      )}
 
       {/* AppKit Modal - positioned absolutely for Expo Router compatibility */}
       <View style={styles.modalContainer}>
@@ -157,13 +330,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 8,
   },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+  },
+  sendButton: {
+    flex: 1,
+    backgroundColor: '#34C759',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  signButton: {
+    flex: 1,
+    backgroundColor: '#FF9500',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
   disconnectButton: {
     backgroundColor: '#FF3B30',
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 8,
     alignItems: 'center',
-    marginTop: 12,
+    minWidth: 60,
   },
   buttonText: {
     color: '#FFFFFF',
@@ -186,10 +380,71 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 8,
   },
+  multichainContainer: {
+    minHeight: 400,
+    marginVertical: 16,
+  },
   modalContainer: {
     position: 'absolute',
     height: '100%',
     width: '100%',
     pointerEvents: 'box-none',
+  },
+  signContainer: {
+    marginTop: 16,
+    padding: 16,
+    backgroundColor: 'rgba(255, 149, 0, 0.1)',
+    borderRadius: 12,
+    gap: 12,
+  },
+  signTitle: {
+    fontSize: 18,
+    marginBottom: 8,
+  },
+  messageInput: {
+    backgroundColor: '#ffffff',
+    color: '#000000',
+    padding: 12,
+    borderRadius: 8,
+    minHeight: 80,
+    textAlignVertical: 'top',
+    fontSize: 14,
+  },
+  signButtonRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  signActionButton: {
+    flex: 1,
+    backgroundColor: '#007AFF',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  signTypedButton: {
+    flex: 1,
+    backgroundColor: '#5856D6',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  signatureContainer: {
+    backgroundColor: 'rgba(0, 0, 0, 0.1)',
+    padding: 12,
+    borderRadius: 8,
+    gap: 4,
+  },
+  signatureText: {
+    fontSize: 12,
+    fontFamily: 'monospace',
+  },
+  closeSignButton: {
+    backgroundColor: '#8E8E93',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    alignItems: 'center',
   },
 });

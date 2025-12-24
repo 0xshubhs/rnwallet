@@ -4,7 +4,33 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { EthersAdapter } from '@reown/appkit-ethers-react-native';
 import { createAppKit } from '@reown/appkit-react-native';
 import Constants from 'expo-constants';
-import { arbitrum, base, mainnet, optimism, polygon } from 'viem/chains';
+import { 
+  arbitrum, 
+  arbitrumSepolia, 
+  avalanche, 
+  base, 
+  baseSepolia, 
+  bsc, 
+  mainnet, 
+  optimism, 
+  optimismSepolia, 
+  polygon, 
+  polygonAmoy, 
+  sepolia 
+} from 'viem/chains';
+
+// Custom Sepolia configuration with 1RPC
+const sepoliaCustom = {
+  ...sepolia,
+  rpcUrls: {
+    default: {
+      http: ['https://1rpc.io/sepolia'],
+    },
+    public: {
+      http: ['https://1rpc.io/sepolia'],
+    },
+  },
+};
 
 // Get Project ID from environment variables
 // Priority: expo-constants extra > process.env > direct value from .env
@@ -49,7 +75,20 @@ const storage = {
 export const appKit = createAppKit({
   projectId,
   adapters: [ethersAdapter],
-  networks: [mainnet, polygon, arbitrum, optimism, base],
+  networks: [
+    mainnet, 
+    sepoliaCustom, 
+    polygon, 
+    polygonAmoy, 
+    arbitrum, 
+    arbitrumSepolia, 
+    optimism, 
+    optimismSepolia, 
+    base, 
+    baseSepolia, 
+    bsc, 
+    avalanche
+  ],
   defaultNetwork: mainnet,
   storage,
   metadata: {
